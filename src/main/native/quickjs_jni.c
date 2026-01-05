@@ -1,79 +1,151 @@
-#include <jni.h>
-#include <string.h>
-#include <stdlib.h>
 #include "quickjs.h"
+#include <jni.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Helper to convert jstring to const char*
-static const char* GetStringUTFChars(JNIEnv *env, jstring str) {
-    if (str == NULL) return NULL;
-    return (*env)->GetStringUTFChars(env, str, NULL);
+static const char *GetStringUTFChars(JNIEnv *env, jstring str) {
+  if (str == NULL)
+    return NULL;
+  return (*env)->GetStringUTFChars(env, str, NULL);
 }
 
-static void ReleaseStringUTFChars(JNIEnv *env, jstring str, const char* chars) {
-    if (str != NULL && chars != NULL) {
-        (*env)->ReleaseStringUTFChars(env, str, chars);
-    }
+static void ReleaseStringUTFChars(JNIEnv *env, jstring str, const char *chars) {
+  if (str != NULL && chars != NULL) {
+    (*env)->ReleaseStringUTFChars(env, str, chars);
+  }
 }
 
-JNIEXPORT jlong JNICALL Java_com_quickjs_QuickJS_createRuntime(JNIEnv *env, jclass clazz) {
-    JSRuntime *rt = JS_NewRuntime();
-    return (jlong)rt;
+JNIEXPORT jlong JNICALL
+Java_com_quickjs_QuickJS_createNativeRuntime(JNIEnv *env, jclass clazz) {
+  JSRuntime *rt = JS_NewRuntime();
+  return (jlong)rt;
 }
 
-JNIEXPORT void JNICALL Java_com_quickjs_QuickJS_freeRuntime(JNIEnv *env, jclass clazz, jlong runtimePtr) {
-    JSRuntime *rt = (JSRuntime *)runtimePtr;
-    if (rt) {
-        JS_FreeRuntime(rt);
-    }
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_freeNativeRuntime(
+    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (rt) {
+    JS_FreeRuntime(rt);
+  }
 }
 
-JNIEXPORT jlong JNICALL Java_com_quickjs_QuickJS_createContext(JNIEnv *env, jclass clazz, jlong runtimePtr) {
-    JSRuntime *rt = (JSRuntime *)runtimePtr;
-    if (!rt) return 0;
-    JSContext *ctx = JS_NewContext(rt);
-    return (jlong)ctx;
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSRuntime_createNativeContext(
+    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (!rt)
+    return 0;
+  JSContext *ctx = JS_NewContext(rt);
+  return (jlong)ctx;
 }
 
-JNIEXPORT void JNICALL Java_com_quickjs_QuickJS_freeContext(JNIEnv *env, jclass clazz, jlong contextPtr) {
-    JSContext *ctx = (JSContext *)contextPtr;
-    if (ctx) {
-        JS_FreeContext(ctx);
-    }
+JNIEXPORT void JNICALL Java_com_quickjs_JSContext_freeNativeContext(
+    JNIEnv *env, jobject thiz, jlong contextPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (ctx) {
+    JS_FreeContext(ctx);
+  }
 }
 
-JNIEXPORT jstring JNICALL Java_com_quickjs_QuickJS_evalInternal(JNIEnv *env, jclass clazz, jlong contextPtr, jstring script) {
-    JSContext *ctx = (JSContext *)contextPtr;
-    if (!ctx) return NULL;
+// Helper to allocate JSValue on heap and return ptr
+static jlong boxJSValue(JSValue v) {
+  JSValue *p = malloc(sizeof(JSValue));
+  *p = v;
+  return (jlong)p;
+}
 
-    const char *c_script = GetStringUTFChars(env, script);
-    if (!c_script) return NULL;
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jstring script) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (!ctx)
+    return 0;
 
-    // Use "<input>" as filename for now
-    JSValue val = JS_Eval(ctx, c_script, strlen(c_script), "<input>", JS_EVAL_TYPE_GLOBAL);
+  const char *c_script = GetStringUTFChars(env, script);
+  if (!c_script)
+    return 0;
 
-    ReleaseStringUTFChars(env, script, c_script);
+  JSValue val =
+      JS_Eval(ctx, c_script, strlen(c_script), "<input>", JS_EVAL_TYPE_GLOBAL);
 
-    const char *str_res = NULL;
-    jstring j_res = NULL;
+  ReleaseStringUTFChars(env, script, c_script);
 
-    if (JS_IsException(val)) {
-        JSValue exception_val = JS_GetException(ctx);
-        // Ensure we convert exception to string
-        str_res = JS_ToCString(ctx, exception_val);
-        // We probably want to throw a Java exception here, but for now returned string prefixed?
-        // Let's just return the error message for this basic step.
-        // A real implementation would map this to a Java exception.
-        JS_FreeValue(ctx, exception_val);
-    } else {
-        str_res = JS_ToCString(ctx, val);
-    }
-    
+  if (JS_IsException(val)) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
     JS_FreeValue(ctx, val);
 
-    if (str_res) {
-        j_res = (*env)->NewStringUTF(env, str_res);
-        JS_FreeCString(ctx, str_res);
-    }
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
 
-    return j_res;
+    JS_FreeCString(ctx, str_res);
+    return 0;
+  }
+
+  return boxJSValue(val);
+}
+
+JNIEXPORT jint JNICALL Java_com_quickjs_JSValue_getTagInternal(JNIEnv *env,
+                                                               jobject thiz,
+                                                               jlong contextPtr,
+                                                               jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_VALUE_GET_NORM_TAG(*v);
+}
+
+JNIEXPORT jint JNICALL Java_com_quickjs_JSValue_toIntegerInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  int32_t res;
+  JS_ToInt32(ctx, &res, *v);
+  return res;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_toBooleanInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  int res = JS_ToBool(ctx, *v);
+  if (res == -1) {
+    // Exception occurred during conversion
+    // TODO: clear and throw? For now just return false.
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return 0;
+  }
+  return (jboolean)res;
+}
+
+JNIEXPORT jdouble JNICALL Java_com_quickjs_JSValue_toDoubleInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  double res;
+  if (JS_ToFloat64(ctx, &res, *v) < 0) {
+    // Exception
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return 0.0; // NaN?
+  }
+  return res;
+}
+
+JNIEXPORT jstring JNICALL Java_com_quickjs_JSValue_toStringInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  const char *str = JS_ToCString(ctx, *v);
+  jstring res = (*env)->NewStringUTF(env, str);
+  JS_FreeCString(ctx, str);
+  return res;
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSValue_closeInternal(JNIEnv *env,
+                                                              jobject thiz,
+                                                              jlong contextPtr,
+                                                              jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  JS_FreeValue(ctx, *v);
+  free(v);
 }
