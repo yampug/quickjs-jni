@@ -1,0 +1,49 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'com.quickjs'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    // Ensure the native library can be found during tests if we put it in build/native
+    systemProperty 'java.library.path', file("${buildDir}/native").absolutePath
+}
+
+task cmake(type: Exec) {
+    doFirst {
+        mkdir "${buildDir}/native"
+    }
+    workingDir "${buildDir}/native"
+    commandLine 'cmake', file('src/main/native').absolutePath, '-B', '.'
+}
+
+task make(type: Exec) {
+    workingDir "${buildDir}/native"
+    commandLine 'make'
+    dependsOn cmake
+}
+
+task buildNative {
+    dependsOn make
+}
+
+// Make sure native is built before testing
+test.dependsOn buildNative
