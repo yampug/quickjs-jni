@@ -30,6 +30,11 @@ public class JSValue implements AutoCloseable {
         return toStringInternal(context.ptr, ptr);
     }
 
+    public String toJSON() {
+        checkClosed();
+        return toJSONInternal(context.ptr, ptr);
+    }
+
     public int getTypeTag() {
         checkClosed();
         return getTagInternal(context.ptr, ptr);
@@ -93,6 +98,8 @@ public class JSValue implements AutoCloseable {
     private native double toDoubleInternal(long contextPtr, long valPtr);
 
     private native String toStringInternal(long contextPtr, long valPtr);
+
+    private native String toJSONInternal(long contextPtr, long valPtr);
 
     private native int getTagInternal(long contextPtr, long valPtr);
 

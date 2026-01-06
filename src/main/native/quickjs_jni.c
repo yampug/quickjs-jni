@@ -47,6 +47,39 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSContext_freeNativeContext(
   }
 }
 
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_executePendingJobInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (!rt)
+    return;
+
+  JSContext *ctx;
+  while (1) {
+    int err = JS_ExecutePendingJob(rt, &ctx);
+    if (err <= 0) {
+      if (err < 0) {
+        // Exception
+        if (ctx) {
+          JSValue exception_val = JS_GetException(ctx);
+          const char *str_res = JS_ToCString(ctx, exception_val);
+          JS_FreeValue(ctx, exception_val);
+
+          jclass excCls =
+              (*env)->FindClass(env, "com/quickjs/QuickJSException");
+          (*env)->ThrowNew(env, excCls, str_res);
+
+          JS_FreeCString(ctx, str_res);
+        } else {
+          jclass excCls =
+              (*env)->FindClass(env, "com/quickjs/QuickJSException");
+          (*env)->ThrowNew(env, excCls, "Unknown error during job execution");
+        }
+      }
+      break;
+    }
+  }
+}
+
 // Helper to allocate JSValue on heap and return ptr
 static jlong boxJSValue(JSValue v) {
   JSValue *p = malloc(sizeof(JSValue));
@@ -267,6 +300,65 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_callInternal(
   }
 
   return boxJSValue(result);
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_parseJSONInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jstring json) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (!ctx)
+    return 0;
+
+  const char *c_json = GetStringUTFChars(env, json);
+  if (!c_json)
+    return 0;
+
+  JSValue val = JS_ParseJSON(ctx, c_json, strlen(c_json), "<input>");
+
+  ReleaseStringUTFChars(env, json, c_json);
+
+  if (JS_IsException(val)) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+    JS_FreeValue(ctx, val); // Free the exception value returned by ParseJSON
+                            // (it is JS_EXCEPTION)
+
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
+
+    JS_FreeCString(ctx, str_res);
+    return 0;
+  }
+
+  return boxJSValue(val);
+}
+
+JNIEXPORT jstring JNICALL Java_com_quickjs_JSValue_toJSONInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+
+  JSValue jsonStrVal = JS_JSONStringify(ctx, *v, JS_UNDEFINED, JS_UNDEFINED);
+
+  if (JS_IsException(jsonStrVal)) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
+
+    JS_FreeCString(ctx, str_res);
+    return NULL;
+  }
+
+  const char *str = JS_ToCString(ctx, jsonStrVal);
+  jstring res = (*env)->NewStringUTF(env, str);
+
+  JS_FreeCString(ctx, str);
+  JS_FreeValue(ctx, jsonStrVal);
+
+  return res;
 }
 
 JNIEXPORT void JNICALL Java_com_quickjs_JSValue_closeInternal(JNIEnv *env,

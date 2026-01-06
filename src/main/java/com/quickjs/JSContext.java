@@ -15,6 +15,12 @@ public class JSContext implements AutoCloseable {
         return new JSValue(valPtr, this);
     }
 
+    public JSValue parseJSON(String json) {
+        checkClosed();
+        long valPtr = parseJSONInternal(ptr, json);
+        return new JSValue(valPtr, this);
+    }
+
     @Override
     public void close() {
         if (ptr != 0) {
@@ -31,6 +37,8 @@ public class JSContext implements AutoCloseable {
 
     // Native method
     private native long evalInternal(long contextPtr, String script);
+
+    private native long parseJSONInternal(long contextPtr, String json);
 
     private native void freeNativeContext(long contextPtr);
 }

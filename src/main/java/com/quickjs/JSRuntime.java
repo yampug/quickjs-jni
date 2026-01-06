@@ -24,6 +24,11 @@ public class JSRuntime implements AutoCloseable {
         }
     }
 
+    public void executePendingJob() {
+        checkClosed();
+        executePendingJobInternal(ptr);
+    }
+
     private void checkClosed() {
         if (ptr == 0) {
             throw new IllegalStateException("JSRuntime is closed");
@@ -31,6 +36,8 @@ public class JSRuntime implements AutoCloseable {
     }
 
     private native long createNativeContext(long runtimePtr);
+
+    private native void executePendingJobInternal(long runtimePtr);
 
     private native void freeNativeRuntime(long runtimePtr);
 }

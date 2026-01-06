@@ -108,4 +108,8 @@ public class QuickJSTest {
             }
         }
     }
+
+    @Test
+    public void testJSON() {
+    }
 }
