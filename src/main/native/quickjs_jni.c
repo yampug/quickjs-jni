@@ -140,6 +140,135 @@ JNIEXPORT jstring JNICALL Java_com_quickjs_JSValue_toStringInternal(
   return res;
 }
 
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_getPropertyStrInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr, jstring key) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *obj = (JSValue *)valPtr;
+
+  const char *c_key = GetStringUTFChars(env, key);
+  if (!c_key)
+    return 0;
+
+  JSValue result = JS_GetPropertyStr(ctx, *obj, c_key);
+
+  ReleaseStringUTFChars(env, key, c_key);
+
+  return boxJSValue(result);
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSValue_setPropertyStrInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr, jstring key,
+    jlong valuePtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *obj = (JSValue *)valPtr;
+  JSValue *val = (JSValue *)valuePtr;
+
+  const char *c_key = GetStringUTFChars(env, key);
+  if (!c_key)
+    return;
+
+  // JS_SetPropertyStr takes ownership of the value.
+  // Since the Java JSValue object still owns 'val', we must duplicate it.
+  JSValue val_dup = JS_DupValue(ctx, *val);
+
+  int res = JS_SetPropertyStr(ctx, *obj, c_key, val_dup);
+
+  ReleaseStringUTFChars(env, key, c_key);
+
+  if (res == -1) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
+
+    JS_FreeCString(ctx, str_res);
+  }
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_getPropertyIdxInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr, jint index) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *obj = (JSValue *)valPtr;
+
+  JSValue result = JS_GetPropertyUint32(ctx, *obj, (uint32_t)index);
+
+  return boxJSValue(result);
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSValue_setPropertyIdxInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr, jint index,
+    jlong valuePtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *obj = (JSValue *)valPtr;
+  JSValue *val = (JSValue *)valuePtr;
+
+  JSValue val_dup = JS_DupValue(ctx, *val);
+
+  int res = JS_SetPropertyUint32(ctx, *obj, (uint32_t)index, val_dup);
+
+  if (res == -1) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
+
+    JS_FreeCString(ctx, str_res);
+  }
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_callInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong funcPtr, jlong thisPtr,
+    jlongArray args) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *func = (JSValue *)funcPtr;
+  JSValue this_val;
+  if (thisPtr == 0) {
+    this_val = JS_UNDEFINED;
+  } else {
+    this_val = *(JSValue *)thisPtr;
+  }
+
+  int argc = (*env)->GetArrayLength(env, args);
+  JSValue *argv = NULL;
+  jlong *argPtrs = NULL;
+
+  if (argc > 0) {
+    argv = malloc(sizeof(JSValue) * argc);
+    argPtrs = (*env)->GetLongArrayElements(env, args, NULL);
+    for (int i = 0; i < argc; i++) {
+      JSValue *arg = (JSValue *)argPtrs[i];
+      argv[i] = *arg;
+    }
+  }
+
+  JSValue result = JS_Call(ctx, *func, this_val, argc, argv);
+
+  if (argPtrs) {
+    (*env)->ReleaseLongArrayElements(env, args, argPtrs, JNI_ABORT);
+  }
+  if (argv) {
+    free(argv);
+  }
+
+  if (JS_IsException(result)) {
+    JSValue exception_val = JS_GetException(ctx);
+    const char *str_res = JS_ToCString(ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+
+    jclass excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+    (*env)->ThrowNew(env, excCls, str_res);
+
+    JS_FreeCString(ctx, str_res);
+    return 0;
+  }
+
+  return boxJSValue(result);
+}
+
 JNIEXPORT void JNICALL Java_com_quickjs_JSValue_closeInternal(JNIEnv *env,
                                                               jobject thiz,
                                                               jlong contextPtr,
