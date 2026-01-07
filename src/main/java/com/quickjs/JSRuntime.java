@@ -27,7 +27,6 @@ public class JSRuntime implements AutoCloseable {
     @Override
     public void close() {
         checkThread();
-        // Cleaner.clean() is idempotent
         cleanable.clean();
         ptr = 0;
     }

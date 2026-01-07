@@ -128,4 +128,24 @@ public class QuickJSTest {
             assertTrue(threadFailed.get(), "Should fail when accessing JSRuntime from another thread");
         }
     }
+
+    @Test
+    public void testCallbacks() {
+        try (JSRuntime runtime = QuickJS.createRuntime()) {
+            try (JSContext context = runtime.createContext()) {
+                try (JSValue addFunc = context.createFunction((ctx, thisObj, args) -> {
+                    int a = args[0].asInteger();
+                    int b = args[1].asInteger();
+                    return context.createInteger(a + b);
+                }, "add", 2)) {
+                    context.setGlobal("add", addFunc);
+
+                    try (JSValue resultVal = context.eval("add(10, 20)")) {
+                        int result = resultVal.asInteger();
+                        assertEquals(30, result);
+                    }
+                }
+            }
+        }
+    }
 }

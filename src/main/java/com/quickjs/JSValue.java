@@ -3,7 +3,7 @@ package com.quickjs;
 import java.lang.ref.Cleaner;
 
 public class JSValue implements AutoCloseable {
-    long ptr; // Pointer to JSValue on native heap
+    long ptr;
     private final JSContext context;
 
     private final Cleaner.Cleanable cleanable;
@@ -94,7 +94,6 @@ public class JSValue implements AutoCloseable {
     @Override
     public void close() {
         checkThread();
-        // Cleaner.clean() is idempotent
         cleanable.clean();
         ptr = 0;
     }
@@ -124,7 +123,6 @@ public class JSValue implements AutoCloseable {
         }
     }
 
-    // Native lookups
     private native int toIntegerInternal(long contextPtr, long valPtr);
 
     private native boolean toBooleanInternal(long contextPtr, long valPtr);
