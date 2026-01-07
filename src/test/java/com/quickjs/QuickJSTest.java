@@ -1,6 +1,7 @@
 package com.quickjs;
 
 import org.junit.jupiter.api.Test;
+import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class QuickJSTest {
@@ -110,6 +111,21 @@ public class QuickJSTest {
     }
 
     @Test
-    public void testJSON() {
+    public void testThreadSafety() throws InterruptedException {
+        try (JSRuntime runtime = QuickJS.createRuntime()) {
+            AtomicBoolean threadFailed = new AtomicBoolean(false);
+            Thread t = new Thread(() -> {
+                try {
+                    runtime.createContext();
+                } catch (IllegalStateException e) {
+                    if (e.getMessage().contains("thread")) {
+                        threadFailed.set(true);
+                    }
+                }
+            });
+            t.start();
+            t.join();
+            assertTrue(threadFailed.get(), "Should fail when accessing JSRuntime from another thread");
+        }
     }
 }

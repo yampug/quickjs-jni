@@ -1,6 +1,7 @@
 package com.quickjs;
 
 public class QuickJS {
+    static final java.lang.ref.Cleaner cleaner = java.lang.ref.Cleaner.create();
     private static boolean libraryLoaded = false;
 
     static {
