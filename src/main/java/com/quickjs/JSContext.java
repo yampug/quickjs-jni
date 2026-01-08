@@ -93,6 +93,65 @@ public class JSContext implements AutoCloseable {
         }
     }
 
+    public JSValue createArray() {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createArrayInternal(ptr);
+        return new JSValue(valPtr, this);
+    }
+
+    public JSValue createObject() {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createObjectInternal(ptr);
+        return new JSValue(valPtr, this);
+    }
+
+    public JSValue toJSValue(Object o) {
+        runtime.checkThread();
+        checkClosed();
+        if (o == null) {
+            // How to make undefined or null?
+            // We don't have createNull / createUndefined yet.
+            // For now, let's assume we want JS null for Java null.
+            // Since we lack a direct null factory, we can evaluate "null".
+            // Optimization: Add createNullInternal later.
+            return eval("null");
+        }
+        if (o instanceof Integer) {
+            return createInteger((Integer) o);
+        }
+        if (o instanceof String) {
+            return createString((String) o);
+        }
+        if (o instanceof Boolean) {
+            // Need createBoolean. For now eval.
+            return eval(o.toString());
+        }
+        if (o instanceof java.util.List) {
+            java.util.List<?> list = (java.util.List<?>) o;
+            JSValue array = createArray();
+            for (int i = 0; i < list.size(); i++) {
+                try (JSValue val = toJSValue(list.get(i))) {
+                    array.setProperty(i, val);
+                }
+            }
+            return array;
+        }
+        if (o instanceof java.util.Map) {
+            java.util.Map<?, ?> map = (java.util.Map<?, ?>) o;
+            JSValue obj = createObject();
+            for (java.util.Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = entry.getKey().toString();
+                try (JSValue val = toJSValue(entry.getValue())) {
+                    obj.setProperty(key, val);
+                }
+            }
+            return obj;
+        }
+        throw new IllegalArgumentException("Unsupported type: " + o.getClass());
+    }
+
     private native long evalInternal(long contextPtr, String script);
 
     private native long parseJSONInternal(long contextPtr, String json);
@@ -104,6 +163,10 @@ public class JSContext implements AutoCloseable {
     private native long createStringInternal(long contextPtr, String value);
 
     private native long getGlobalObjectInternal(long contextPtr);
+
+    private native long createArrayInternal(long contextPtr);
+
+    private native long createObjectInternal(long contextPtr);
 
     private native void registerJavaContext(long contextPtr, JSContext thiz);
 

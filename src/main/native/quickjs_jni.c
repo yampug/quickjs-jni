@@ -544,3 +544,56 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_getGlobalObjectInternal(
     return 0;
   return boxJSValue(JS_GetGlobalObject(ctx));
 }
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createArrayInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (!ctx)
+    return 0;
+  return boxJSValue(JS_NewArray(ctx));
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createObjectInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (!ctx)
+    return 0;
+  return boxJSValue(JS_NewObject(ctx));
+}
+
+JNIEXPORT jobjectArray JNICALL Java_com_quickjs_JSValue_getKeysInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *obj = (JSValue *)valPtr;
+
+  if (!ctx || !obj)
+    return NULL;
+
+  JSPropertyEnum *tab;
+  uint32_t len;
+
+  if (JS_GetOwnPropertyNames(ctx, &tab, &len, *obj,
+                             JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK |
+                                 JS_GPN_ENUM_ONLY) == -1) {
+    return NULL;
+  }
+
+  jclass stringCls = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray keys = (*env)->NewObjectArray(env, len, stringCls, NULL);
+
+  for (uint32_t i = 0; i < len; i++) {
+    JSValue val = JS_AtomToValue(ctx, tab[i].atom);
+    const char *str = JS_ToCString(ctx, val);
+    jstring jstr = (*env)->NewStringUTF(env, str);
+
+    (*env)->SetObjectArrayElement(env, keys, i, jstr);
+
+    (*env)->DeleteLocalRef(env, jstr);
+    JS_FreeCString(ctx, str);
+    JS_FreeValue(ctx, val);
+  }
+
+  js_free(ctx, tab);
+
+  return keys;
+}

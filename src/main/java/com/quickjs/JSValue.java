@@ -108,6 +108,61 @@ public class JSValue implements AutoCloseable {
         context.checkThread();
     }
 
+    public int getLength() {
+        checkThread();
+        checkClosed();
+        // Array.length is a property
+        try (JSValue lenVal = getProperty("length")) {
+            if (lenVal.getTypeTag() == 0) { // JS_TAG_INT (checking tags is raw, usually better methods)
+                // But we don't have isUndefined/isNull exposed well yet.
+                // Assuming toInteger handles conversions.
+            }
+            return lenVal.asInteger();
+        }
+    }
+
+    public String[] getKeys() {
+        checkThread();
+        checkClosed();
+        return getKeysInternal(context.ptr, ptr);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> T toJavaObject(Class<T> clazz) {
+        checkThread();
+        checkClosed();
+        if (clazz == Integer.class || clazz == int.class) {
+            return (T) Integer.valueOf(asInteger());
+        }
+        if (clazz == String.class) {
+            return (T) asString();
+        }
+        if (clazz == Boolean.class || clazz == boolean.class) {
+            return (T) Boolean.valueOf(asBoolean());
+        }
+        if (clazz == Double.class || clazz == double.class) {
+            return (T) Double.valueOf(asDouble());
+        }
+        if (java.util.List.class.isAssignableFrom(clazz)) {
+            java.util.List<Object> list = new java.util.ArrayList<>();
+            int len = getLength();
+            for (int i = 0; i < len; i++) {
+                try (JSValue item = getProperty(i)) {
+                    // Best effort recursion? Or String?
+                    // For now, let's map to generic Objects based on tag?
+                    // Or just Strings for simplicity?
+                    // Let's recurse if we know the target type, but here we have List<?>.
+                    // We need dynamic typing.
+                    // Simple implementation: String
+                    list.add(item.asString());
+                }
+            }
+            return (T) list;
+        }
+        // TODO: Map support
+        return null;
+    }
+
     private static class NativeValueCleaner implements Runnable {
         private final long valPtr;
         private final long ctxPtr;
@@ -144,6 +199,8 @@ public class JSValue implements AutoCloseable {
     private native void setPropertyIdxInternal(long contextPtr, long valPtr, int index, long valuePtr);
 
     private native long callInternal(long contextPtr, long funcPtr, long thisPtr, long[] args);
+
+    private native String[] getKeysInternal(long contextPtr, long valPtr);
 
     private static native void closeInternal(long contextPtr, long valPtr);
 }
