@@ -168,7 +168,52 @@ public class JSContext implements AutoCloseable {
 
     private native long createObjectInternal(long contextPtr);
 
+    private native Long[] createPromiseCapabilityInternal(long contextPtr);
+
     private native void registerJavaContext(long contextPtr, JSContext thiz);
 
     private static native void freeNativeContext(long contextPtr);
+
+    public JSValue createPromise(java.util.concurrent.CompletableFuture<?> future) {
+        runtime.checkThread();
+        checkClosed();
+
+        // [promise, resolve, reject] pointers
+        Long[] caps = createPromiseCapabilityInternal(ptr);
+        if (caps == null) {
+            throw new QuickJSException("Failed to create Promise capability");
+        }
+
+        long promisePtr = caps[0];
+        long resolvePtr = caps[1];
+        long rejectPtr = caps[2];
+
+        JSValue promise = new JSValue(promisePtr, this);
+        // We must manage resolve/reject functions. They are JSValues.
+        JSValue resolveFunc = new JSValue(resolvePtr, this);
+        JSValue rejectFunc = new JSValue(rejectPtr, this);
+
+        future.whenComplete((result, ex) -> {
+            // This runs on an arbitrary thread.
+            // We must post back to the JS thread.
+            runtime.post(() -> {
+                try {
+                    if (ex != null) {
+                        try (JSValue error = createString(ex.getMessage())) { // Simple error for now
+                            rejectFunc.call(null, error);
+                        }
+                    } else {
+                        try (JSValue val = toJSValue(result)) {
+                            resolveFunc.call(null, val);
+                        }
+                    }
+                } finally {
+                    resolveFunc.close();
+                    rejectFunc.close();
+                }
+            });
+        });
+
+        return promise;
+    }
 }

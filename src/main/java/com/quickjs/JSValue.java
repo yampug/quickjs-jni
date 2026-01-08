@@ -131,6 +131,13 @@ public class JSValue implements AutoCloseable {
     public <T> T toJavaObject(Class<T> clazz) {
         checkThread();
         checkClosed();
+
+        if (clazz == Void.class)
+            return null;
+
+        // TODO: Handle NULL and UNDEFINED tags explicitly.
+        // Currently relying on type check failure or manual string check in caller.
+
         if (clazz == Integer.class || clazz == int.class) {
             return (T) Integer.valueOf(asInteger());
         }
@@ -159,8 +166,45 @@ public class JSValue implements AutoCloseable {
             }
             return (T) list;
         }
+
         // TODO: Map support
         return null;
+    }
+
+    public JSValue dup() {
+        checkThread();
+        checkClosed();
+        // Native dup needed
+        return new JSValue(dupInternal(context.ptr, ptr), context);
+    }
+
+    public java.util.concurrent.CompletableFuture<JSValue> toFuture() {
+        checkThread();
+        checkClosed();
+
+        java.util.concurrent.CompletableFuture<JSValue> future = new java.util.concurrent.CompletableFuture<>();
+
+        try (JSValue thenProp = getProperty("then")) {
+            // Check if it's a promise (has 'then' method)
+            // Note: simple tag check skipped, assuming caller knows it's a Promise-like
+            // object.
+
+            JSFunction onResolve = (ctx, thisObj, args) -> {
+                JSValue result = (args.length > 0) ? args[0] : context.eval("undefined");
+                future.complete(result.dup());
+                return context.createInteger(0);
+            };
+
+            JSFunction onReject = (ctx, thisObj, args) -> {
+                JSValue err = (args.length > 0) ? args[0] : context.eval("'Unknown Error'");
+                future.completeExceptionally(new QuickJSException(err.asString()));
+                return context.createInteger(0);
+            };
+
+            thenProp.call(this, context.createFunction(onResolve, "resolve", 1),
+                    context.createFunction(onReject, "reject", 1));
+        }
+        return future;
     }
 
     private static class NativeValueCleaner implements Runnable {
@@ -203,4 +247,6 @@ public class JSValue implements AutoCloseable {
     private native String[] getKeysInternal(long contextPtr, long valPtr);
 
     private static native void closeInternal(long contextPtr, long valPtr);
+
+    private native long dupInternal(long contextPtr, long valPtr);
 }
