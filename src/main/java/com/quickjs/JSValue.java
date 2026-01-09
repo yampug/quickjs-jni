@@ -2,7 +2,7 @@ package com.quickjs;
 
 import java.lang.ref.Cleaner;
 
-public class JSValue implements AutoCloseable {
+public class JSValue implements AutoCloseable, Iterable<JSValue> {
     long ptr;
     private final JSContext context;
 
@@ -207,6 +207,71 @@ public class JSValue implements AutoCloseable {
         return future;
     }
 
+    public boolean has(String key) {
+        checkThread();
+        checkClosed();
+        return hasPropertyInternal(context.ptr, ptr, key);
+    }
+
+    public JSValue invokeMember(String name, Object... args) {
+        checkThread();
+        checkClosed();
+        try (JSValue method = getProperty(name)) {
+            // TODO: check if method is callable? 'call' will throw if not function?
+            // Actually callInternal might return exception value if not callable.
+
+            // We need to convert args to JSValue[]
+            JSValue[] jsArgs = new JSValue[args.length];
+            // We need to be careful to close these if call throws?
+            // Or better, let caller handle?
+            // But we created them. We should close them.
+            // But `call` doesn't take ownership.
+
+            try {
+                for (int i = 0; i < args.length; i++) {
+                    jsArgs[i] = context.toJSValue(args[i]);
+                }
+                return method.call(this, jsArgs);
+            } finally {
+                // Determine if we should close jsArgs?
+                // Yes, toJSValue creates new JSValues.
+                for (JSValue val : jsArgs) {
+                    if (val != null) {
+                        val.close();
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public java.util.Iterator<JSValue> iterator() {
+        checkThread();
+        checkClosed();
+        // Assuming array-like
+        int length = getLength();
+        // If undefined, getLength returns?
+        // We implemented getLength to return asInteger() of "length" property.
+        // If undefined, asInteger -> 0 (usually, depending on implementation).
+
+        return new java.util.Iterator<JSValue>() {
+            private int index = 0;
+
+            @Override
+            public boolean hasNext() {
+                return index < length;
+            }
+
+            @Override
+            public JSValue next() {
+                if (!hasNext()) {
+                    throw new java.util.NoSuchElementException();
+                }
+                return getProperty(index++);
+            }
+        };
+    }
+
     private static class NativeValueCleaner implements Runnable {
         private final long valPtr;
         private final long ctxPtr;
@@ -241,6 +306,8 @@ public class JSValue implements AutoCloseable {
     private native long getPropertyIdxInternal(long contextPtr, long valPtr, int index);
 
     private native void setPropertyIdxInternal(long contextPtr, long valPtr, int index, long valuePtr);
+
+    private native boolean hasPropertyInternal(long contextPtr, long valPtr, String key);
 
     private native long callInternal(long contextPtr, long funcPtr, long thisPtr, long[] args);
 

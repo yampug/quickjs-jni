@@ -760,3 +760,22 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_dupInternal(JNIEnv *env,
 
   return boxJSValue(JS_DupValue(ctx, *v));
 }
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_hasPropertyInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr, jstring key) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  if (!ctx || !v)
+    return JNI_FALSE;
+
+  const char *prop_name = GetStringUTFChars(env, key);
+  if (!prop_name)
+    return JNI_FALSE;
+
+  JSAtom atom = JS_NewAtom(ctx, prop_name);
+  int result = JS_HasProperty(ctx, *v, atom);
+  JS_FreeAtom(ctx, atom);
+
+  ReleaseStringUTFChars(env, key, prop_name);
+  return result ? JNI_TRUE : JNI_FALSE;
+}

@@ -29,6 +29,13 @@ public class JSContext implements AutoCloseable {
         return new JSValue(valPtr, this);
     }
 
+    public JSValue eval(java.nio.file.Path path) throws java.io.IOException {
+        runtime.checkThread();
+        checkClosed();
+        String script = java.nio.file.Files.readString(path);
+        return eval(script, path.toString(), EVAL_TYPE_GLOBAL);
+    }
+
     public JSValue parseJSON(String json) {
         runtime.checkThread();
         checkClosed();
