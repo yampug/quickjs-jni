@@ -113,13 +113,125 @@ Java_com_quickjs_QuickJS_createNativeRuntime(JNIEnv *env, jclass clazz) {
   return (jlong)rt;
 }
 
+JSModuleDef *js_java_module_loader(JSContext *ctx, const char *module_name,
+                                   void *opaque) {
+  jobject loader = (jobject)opaque;
+  if (!loader)
+    return NULL;
+
+  JNIEnv *env;
+  if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+    return NULL;
+  }
+
+  // loadModule(String moduleName) -> String
+  jclass loaderCls = (*env)->GetObjectClass(env, loader);
+  jmethodID loadMethod = (*env)->GetMethodID(
+      env, loaderCls, "loadModule", "(Ljava/lang/String;)Ljava/lang/String;");
+
+  jstring jModuleName = (*env)->NewStringUTF(env, module_name);
+  jstring jContent =
+      (jstring)(*env)->CallObjectMethod(env, loader, loadMethod, jModuleName);
+
+  (*env)->DeleteLocalRef(env, jModuleName);
+  (*env)->DeleteLocalRef(env, loaderCls);
+
+  if ((*env)->ExceptionCheck(env)) {
+    // Exception in loader -> throw in JS
+    // We can't easily propagate the Java exception to the module loader failure
+    // failure directly as proper JS error, but returning NULL causes a generic
+    // generic load error.
+    (*env)->ExceptionClear(env); // Clear it so we don't crash JNI
+    return NULL;
+  }
+
+  if (!jContent) {
+    return NULL; // Module not found
+  }
+
+  const char *content = GetStringUTFChars(env, jContent);
+  // Takes ownership of buffer? No, JS_Eval creates copy?
+  // JS_Eval(ctx, input, input_len, filename, flags)
+  // For module loading, we usually return JS_Eval result which is a Module
+  // object.
+
+  JSValue val = JS_Eval(ctx, content, strlen(content), module_name,
+                        JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+
+  ReleaseStringUTFChars(env, jContent, content);
+  (*env)->DeleteLocalRef(env, jContent);
+
+  if (JS_IsException(val)) {
+    return NULL;
+  }
+
+  return (JSModuleDef *)JS_VALUE_GET_PTR(val);
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setModuleLoaderInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr, jobject loader) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (!rt)
+    return;
+
+  // Manage previous loader
+  jobject oldLoader = (jobject)JS_GetRuntimeOpaque(rt);
+  if (oldLoader) {
+    (*env)->DeleteGlobalRef(env, oldLoader);
+  }
+
+  jobject newLoader = NULL;
+  if (loader) {
+    newLoader = (*env)->NewGlobalRef(env, loader);
+  }
+  JS_SetRuntimeOpaque(rt, newLoader);
+
+  JS_SetModuleLoaderFunc(rt, NULL, js_java_module_loader, newLoader);
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jstring script,
+    jstring fileName, jint type) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  if (!ctx)
+    return 0;
+
+  const char *c_script = GetStringUTFChars(env, script);
+  if (!c_script)
+    return 0;
+
+  const char *c_filename = GetStringUTFChars(env, fileName);
+
+  JSValue val = JS_Eval(ctx, c_script, strlen(c_script), c_filename, type);
+
+  ReleaseStringUTFChars(env, script, c_script);
+  ReleaseStringUTFChars(env, fileName, c_filename);
+
+  if (JS_IsException(val)) {
+    JSValue exception_val = JS_GetException(ctx);
+    throwJSException(env, ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+    JS_FreeValue(ctx, val);
+    return 0;
+  }
+
+  return boxJSValue(val);
+}
+
+// Update freeNativeRuntime to release loader
 JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_freeNativeRuntime(
     JNIEnv *env, jobject thiz, jlong runtimePtr) {
   JSRuntime *rt = (JSRuntime *)runtimePtr;
   if (rt) {
+    jobject oldLoader = (jobject)JS_GetRuntimeOpaque(rt);
+    if (oldLoader) {
+      (*env)->DeleteGlobalRef(env, oldLoader);
+    }
     JS_FreeRuntime(rt);
   }
 }
+
+// ... Rest of file methods needing restoration ...
 
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSRuntime_createNativeContext(
     JNIEnv *env, jobject thiz, jlong runtimePtr) {
@@ -145,32 +257,6 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSContext_registerJavaContext(
     return;
   jweak globalCtx = (*env)->NewWeakGlobalRef(env, javaContext);
   JS_SetContextOpaque(ctx, globalCtx);
-}
-
-JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
-    JNIEnv *env, jobject thiz, jlong contextPtr, jstring script) {
-  JSContext *ctx = (JSContext *)contextPtr;
-  if (!ctx)
-    return 0;
-
-  const char *c_script = GetStringUTFChars(env, script);
-  if (!c_script)
-    return 0;
-
-  JSValue val =
-      JS_Eval(ctx, c_script, strlen(c_script), "<input>", JS_EVAL_TYPE_GLOBAL);
-
-  ReleaseStringUTFChars(env, script, c_script);
-
-  if (JS_IsException(val)) {
-    JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
-    JS_FreeValue(ctx, exception_val);
-    JS_FreeValue(ctx, val);
-    return 0;
-  }
-
-  return boxJSValue(val);
 }
 
 JNIEXPORT jint JNICALL Java_com_quickjs_JSValue_getTagInternal(JNIEnv *env,

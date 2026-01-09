@@ -15,10 +15,17 @@ public class JSContext implements AutoCloseable {
         registerJavaContext(ptr, this);
     }
 
+    public static final int EVAL_TYPE_GLOBAL = 0;
+    public static final int EVAL_TYPE_MODULE = 1;
+
     public JSValue eval(String script) {
+        return eval(script, "<input>", EVAL_TYPE_GLOBAL);
+    }
+
+    public JSValue eval(String script, String fileName, int type) {
         runtime.checkThread();
         checkClosed();
-        long valPtr = evalInternal(ptr, script);
+        long valPtr = evalInternal(ptr, script, fileName, type);
         return new JSValue(valPtr, this);
     }
 
@@ -152,7 +159,7 @@ public class JSContext implements AutoCloseable {
         throw new IllegalArgumentException("Unsupported type: " + o.getClass());
     }
 
-    private native long evalInternal(long contextPtr, String script);
+    private native long evalInternal(long contextPtr, String script, String fileName, int type);
 
     private native long parseJSONInternal(long contextPtr, String json);
 

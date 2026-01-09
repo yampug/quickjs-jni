@@ -100,6 +100,17 @@ public class JSRuntime implements AutoCloseable {
         }
     }
 
+    public void setModuleLoader(JSModuleLoader loader) {
+        checkThread();
+        checkClosed();
+        // Keep a strong reference to the loader to prevent GC if we only hold weak ref
+        // in native (or if native holds global ref)
+        // Native side will hold a GlobalRef.
+        setModuleLoaderInternal(ptr, loader);
+    }
+
+    private native void setModuleLoaderInternal(long runtimePtr, JSModuleLoader loader);
+
     private static native long createRuntimeInternal();
 
     private static native void freeRuntimeInternal(long ptr);
