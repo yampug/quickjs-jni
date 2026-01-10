@@ -44,13 +44,22 @@ static jlong boxJSValue(JSValue v) {
   return (jlong)p;
 }
 
-static void throwJSException(JNIEnv *env, JSContext *ctx, JSValue ex) {
-  // 1. Get exception message
-  const char *msg = JS_ToCString(ctx, ex);
+// Helper macros for validaty checks
+#define CHECK_PTR(ptr, ret)                                                    \
+  if (!ptr)                                                                    \
+    return ret;
 
-  // 2. Detect Exception Class based on 'name' property
+#define CHECK_CONTEXT(ctx) CHECK_PTR(ctx, 0)
+#define CHECK_RUNTIME(rt) CHECK_PTR(rt, 0)
+
+static void throw_java_exception(JNIEnv *env, JSContext *ctx,
+                                 JSValue exception_val) {
+  // 1. Get exception message
+  const char *msg = JS_ToCString(ctx, exception_val);
+
+  // 2. Detect Exception Class
   const char *className = "com/quickjs/QuickJSException";
-  JSValue nameVal = JS_GetPropertyStr(ctx, ex, "name");
+  JSValue nameVal = JS_GetPropertyStr(ctx, exception_val, "name");
   if (!JS_IsUndefined(nameVal) && !JS_IsNull(nameVal)) {
     const char *name = JS_ToCString(ctx, nameVal);
     if (name) {
@@ -69,9 +78,9 @@ static void throwJSException(JNIEnv *env, JSContext *ctx, JSValue ex) {
   }
   JS_FreeValue(ctx, nameVal);
 
-  // 3. Get Stack Trace
+  // 3. Get Stack
   const char *stack = NULL;
-  JSValue stackVal = JS_GetPropertyStr(ctx, ex, "stack");
+  JSValue stackVal = JS_GetPropertyStr(ctx, exception_val, "stack");
   if (!JS_IsUndefined(stackVal)) {
     stack = JS_ToCString(ctx, stackVal);
   }
@@ -82,25 +91,32 @@ static void throwJSException(JNIEnv *env, JSContext *ctx, JSValue ex) {
   if (msg && stack && strlen(stack) > 0) {
     size_t len = strlen(msg) + strlen(stack) + 2;
     full_msg = malloc(len);
-    if (full_msg) {
+    if (full_msg)
       snprintf(full_msg, len, "%s\n%s", msg, stack);
-    }
   }
-
   const char *final_msg = full_msg ? full_msg : (msg ? msg : "Unknown Error");
 
+  // 5. Throw Java Exception
   jclass excCls = (*env)->FindClass(env, className);
-  if (!excCls) {
+  if (!excCls)
     excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
-  }
   (*env)->ThrowNew(env, excCls, final_msg);
 
+  // Clean up
   if (msg)
     JS_FreeCString(ctx, msg);
   if (stack)
     JS_FreeCString(ctx, stack);
   if (full_msg)
     free(full_msg);
+}
+
+static void check_throw_exception(JNIEnv *env, JSContext *ctx, JSValue val) {
+  if (JS_IsException(val)) {
+    JSValue exception_val = JS_GetException(ctx);
+    throw_java_exception(env, ctx, exception_val);
+    JS_FreeValue(ctx, exception_val);
+  }
 }
 
 typedef struct {
@@ -262,13 +278,16 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setModuleLoaderInternal(
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
     JNIEnv *env, jobject thiz, jlong contextPtr, jstring script,
     jstring fileName, jint type) {
+  JSRuntime *rt = (JSRuntime *)contextPtr; // Wait, contextPtr is JSContext*?
+  // Previous code cast JSRuntime... wait.
+  // Line 265: JSContext *ctx = (JSContext *)contextPtr;
+  // OK.
+
   JSContext *ctx = (JSContext *)contextPtr;
-  if (!ctx)
-    return 0;
+  CHECK_CONTEXT(ctx);
 
   const char *c_script = GetStringUTFChars(env, script);
-  if (!c_script)
-    return 0;
+  CHECK_PTR(c_script, 0);
 
   const char *c_filename = GetStringUTFChars(env, fileName);
 
@@ -277,11 +296,8 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
   ReleaseStringUTFChars(env, script, c_script);
   ReleaseStringUTFChars(env, fileName, c_filename);
 
+  check_throw_exception(env, ctx, val);
   if (JS_IsException(val)) {
-    JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
-    JS_FreeValue(ctx, exception_val);
-    JS_FreeValue(ctx, val);
     return 0;
   }
 
@@ -429,7 +445,7 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSValue_setPropertyStrInternal(
 
   if (res == -1) {
     JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
+    throw_java_exception(env, ctx, exception_val);
     JS_FreeValue(ctx, exception_val);
   }
 }
@@ -457,7 +473,7 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSValue_setPropertyIdxInternal(
 
   if (res == -1) {
     JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
+    throw_java_exception(env, ctx, exception_val);
     JS_FreeValue(ctx, exception_val);
   }
 }
@@ -496,10 +512,8 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_callInternal(
     free(argv);
   }
 
+  check_throw_exception(env, ctx, result);
   if (JS_IsException(result)) {
-    JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
-    JS_FreeValue(ctx, exception_val);
     return 0;
   }
 
@@ -509,21 +523,17 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSValue_callInternal(
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_parseJSONInternal(
     JNIEnv *env, jobject thiz, jlong contextPtr, jstring json) {
   JSContext *ctx = (JSContext *)contextPtr;
-  if (!ctx)
-    return 0;
+  CHECK_CONTEXT(ctx);
 
   const char *c_json = GetStringUTFChars(env, json);
-  if (!c_json)
-    return 0;
+  CHECK_PTR(c_json, 0);
 
   JSValue val = JS_ParseJSON(ctx, c_json, strlen(c_json), "<input>");
 
   ReleaseStringUTFChars(env, json, c_json);
 
+  check_throw_exception(env, ctx, val);
   if (JS_IsException(val)) {
-    JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
-    JS_FreeValue(ctx, exception_val);
     return 0;
   }
 
@@ -537,10 +547,8 @@ JNIEXPORT jstring JNICALL Java_com_quickjs_JSValue_toJSONInternal(
 
   JSValue jsonStrVal = JS_JSONStringify(ctx, *v, JS_UNDEFINED, JS_UNDEFINED);
 
+  check_throw_exception(env, ctx, jsonStrVal);
   if (JS_IsException(jsonStrVal)) {
-    JSValue exception_val = JS_GetException(ctx);
-    throwJSException(env, ctx, exception_val);
-    JS_FreeValue(ctx, exception_val);
     return NULL;
   }
 
@@ -721,9 +729,109 @@ JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createArrayInternal(
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createObjectInternal(
     JNIEnv *env, jobject thiz, jlong contextPtr) {
   JSContext *ctx = (JSContext *)contextPtr;
-  if (!ctx)
-    return 0;
+  CHECK_CONTEXT(ctx);
   return boxJSValue(JS_NewObject(ctx));
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createNullInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  CHECK_CONTEXT(ctx);
+  return boxJSValue(JS_NULL);
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createUndefinedInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  CHECK_CONTEXT(ctx);
+  return boxJSValue(JS_UNDEFINED);
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createBooleanInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jboolean v) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  CHECK_CONTEXT(ctx);
+  return boxJSValue(JS_NewBool(ctx, v));
+}
+
+JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_createDoubleInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jdouble v) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  CHECK_CONTEXT(ctx);
+  return boxJSValue(JS_NewFloat64(ctx, v));
+}
+
+// Type Checkers
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isStringInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsString(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isNumberInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsNumber(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isIntegerInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  // JS_IsInteger does not exist in public API, check tag
+  int tag = JS_VALUE_GET_NORM_TAG(*v);
+  return tag == JS_TAG_INT;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isBooleanInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsBool(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isArrayInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsArray(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isObjectInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsObject(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isFunctionInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsFunction(ctx, *v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isErrorInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsError(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isNullInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsNull(*v);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_quickjs_JSValue_isUndefinedInternal(
+    JNIEnv *env, jobject thiz, jlong contextPtr, jlong valPtr) {
+  JSContext *ctx = (JSContext *)contextPtr;
+  JSValue *v = (JSValue *)valPtr;
+  return JS_IsUndefined(*v);
 }
 
 JNIEXPORT jobjectArray JNICALL Java_com_quickjs_JSValue_getKeysInternal(

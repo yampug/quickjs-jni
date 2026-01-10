@@ -64,6 +64,34 @@ public class JSContext implements AutoCloseable {
         return new JSValue(valPtr, this);
     }
 
+    public JSValue createNull() {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createNullInternal(ptr);
+        return new JSValue(valPtr, this);
+    }
+
+    public JSValue createUndefined() {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createUndefinedInternal(ptr);
+        return new JSValue(valPtr, this);
+    }
+
+    public JSValue createBoolean(boolean value) {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createBooleanInternal(ptr, value);
+        return new JSValue(valPtr, this);
+    }
+
+    public JSValue createDouble(double value) {
+        runtime.checkThread();
+        checkClosed();
+        long valPtr = createDoubleInternal(ptr, value);
+        return new JSValue(valPtr, this);
+    }
+
     public JSValue getGlobalObject() {
         runtime.checkThread();
         checkClosed();
@@ -125,12 +153,7 @@ public class JSContext implements AutoCloseable {
         runtime.checkThread();
         checkClosed();
         if (o == null) {
-            // How to make undefined or null?
-            // We don't have createNull / createUndefined yet.
-            // For now, let's assume we want JS null for Java null.
-            // Since we lack a direct null factory, we can evaluate "null".
-            // Optimization: Add createNullInternal later.
-            return eval("null");
+            return createNull();
         }
         if (o instanceof Integer) {
             return createInteger((Integer) o);
@@ -139,8 +162,10 @@ public class JSContext implements AutoCloseable {
             return createString((String) o);
         }
         if (o instanceof Boolean) {
-            // Need createBoolean. For now eval.
-            return eval(o.toString());
+            return createBoolean((Boolean) o);
+        }
+        if (o instanceof Double || o instanceof Float) {
+            return createDouble(((Number) o).doubleValue());
         }
         if (o instanceof java.util.List) {
             java.util.List<?> list = (java.util.List<?>) o;
@@ -181,6 +206,14 @@ public class JSContext implements AutoCloseable {
     private native long createArrayInternal(long contextPtr);
 
     private native long createObjectInternal(long contextPtr);
+
+    private native long createNullInternal(long contextPtr);
+
+    private native long createUndefinedInternal(long contextPtr);
+
+    private native long createBooleanInternal(long contextPtr, boolean value);
+
+    private native long createDoubleInternal(long contextPtr, double value);
 
     private native Long[] createPromiseCapabilityInternal(long contextPtr);
 

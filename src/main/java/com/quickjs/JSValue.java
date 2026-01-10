@@ -210,7 +210,72 @@ public class JSValue implements AutoCloseable, Iterable<JSValue> {
     public boolean has(String key) {
         checkThread();
         checkClosed();
+        // hasPropertyInternal? It was not implemented in C in previous steps!
+        // Wait, did I miss hasPropertyInternal implementation?
+        // It was listed in JSValue.java line 310.
+        // Let's check native status later.
+        // But for now adding type checkers.
         return hasPropertyInternal(context.ptr, ptr, key);
+    }
+
+    public boolean isString() {
+        checkThread();
+        checkClosed();
+        return isStringInternal(context.ptr, ptr);
+    }
+
+    public boolean isNumber() {
+        checkThread();
+        checkClosed();
+        return isNumberInternal(context.ptr, ptr);
+    }
+
+    public boolean isInteger() {
+        checkThread();
+        checkClosed();
+        return isIntegerInternal(context.ptr, ptr);
+    }
+
+    public boolean isBoolean() {
+        checkThread();
+        checkClosed();
+        return isBooleanInternal(context.ptr, ptr);
+    }
+
+    public boolean isArray() {
+        checkThread();
+        checkClosed();
+        return isArrayInternal(context.ptr, ptr);
+    }
+
+    public boolean isObject() {
+        checkThread();
+        checkClosed();
+        return isObjectInternal(context.ptr, ptr);
+    }
+
+    public boolean isFunction() {
+        checkThread();
+        checkClosed();
+        return isFunctionInternal(context.ptr, ptr);
+    }
+
+    public boolean isError() {
+        checkThread();
+        checkClosed();
+        return isErrorInternal(context.ptr, ptr);
+    }
+
+    public boolean isNull() {
+        checkThread();
+        checkClosed();
+        return isNullInternal(context.ptr, ptr);
+    }
+
+    public boolean isUndefined() {
+        checkThread();
+        checkClosed();
+        return isUndefinedInternal(context.ptr, ptr);
     }
 
     public JSValue invokeMember(String name, Object... args) {
@@ -316,4 +381,24 @@ public class JSValue implements AutoCloseable, Iterable<JSValue> {
     private static native void closeInternal(long contextPtr, long valPtr);
 
     private native long dupInternal(long contextPtr, long valPtr);
+
+    private native boolean isStringInternal(long contextPtr, long valPtr);
+
+    private native boolean isNumberInternal(long contextPtr, long valPtr);
+
+    private native boolean isIntegerInternal(long contextPtr, long valPtr);
+
+    private native boolean isBooleanInternal(long contextPtr, long valPtr);
+
+    private native boolean isArrayInternal(long contextPtr, long valPtr);
+
+    private native boolean isObjectInternal(long contextPtr, long valPtr);
+
+    private native boolean isFunctionInternal(long contextPtr, long valPtr);
+
+    private native boolean isErrorInternal(long contextPtr, long valPtr);
+
+    private native boolean isNullInternal(long contextPtr, long valPtr);
+
+    private native boolean isUndefinedInternal(long contextPtr, long valPtr);
 }
