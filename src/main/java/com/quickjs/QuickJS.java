@@ -24,11 +24,51 @@ public class QuickJS {
     }
 
     public static JSRuntime createRuntime() {
-        long runtimePtr = createNativeRuntime();
-        if (runtimePtr == 0) {
-            throw new IllegalStateException("Failed to create JSRuntime");
+        return new Builder().build();
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static class Builder {
+        private long memoryLimit = -1;
+        private long maxStackSize = -1;
+        private boolean withStdLib = true;
+
+        public Builder withMemoryLimit(long memoryLimit) {
+            this.memoryLimit = memoryLimit;
+            return this;
         }
-        return new JSRuntime(runtimePtr);
+
+        public Builder withMaxStackSize(long maxStackSize) {
+            this.maxStackSize = maxStackSize;
+            return this;
+        }
+
+        public Builder withoutStdLib() {
+            this.withStdLib = false;
+            return this;
+        }
+
+        public JSRuntime build() {
+            long runtimePtr = createNativeRuntime();
+            if (runtimePtr == 0) {
+                throw new IllegalStateException("Failed to create JSRuntime");
+            }
+            JSRuntime runtime = new JSRuntime(runtimePtr);
+            if (memoryLimit > 0) {
+                runtime.setMemoryLimit(memoryLimit);
+            }
+            if (maxStackSize > 0) {
+                runtime.setMaxStackSize(maxStackSize);
+            }
+            // StdLib is per-context, so we need to store this pref in JSRuntime?
+            // Actually, JSRuntime creates the context.
+            // So we should pass this config to JSRuntime.
+            runtime.setWithStdLib(withStdLib);
+            return runtime;
+        }
     }
 
     private static void loadNativeLibraryFromJar() throws IOException {

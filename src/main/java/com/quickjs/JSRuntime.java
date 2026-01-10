@@ -27,7 +27,7 @@ public class JSRuntime implements AutoCloseable {
     public JSContext createContext() {
         checkThread();
         checkClosed();
-        long contextPtr = createNativeContext(ptr);
+        long contextPtr = createNativeContext(ptr, withStdLib);
         if (contextPtr == 0) {
             throw new RuntimeException("Failed to create QuickJS context");
         }
@@ -109,13 +109,56 @@ public class JSRuntime implements AutoCloseable {
         setModuleLoaderInternal(ptr, loader);
     }
 
+    public void setMemoryLimit(long limit) {
+        checkThread();
+        checkClosed();
+        setMemoryLimitInternal(ptr, limit);
+    }
+
+    public void setMaxStackSize(long size) {
+        checkThread();
+        checkClosed();
+        setMaxStackSizeInternal(ptr, size);
+    }
+
+    public void interrupt() {
+        // Can be called from any thread?
+        // Interrupt logic usually involves setting a flag checked by another thread.
+        // QuickJS's JS_SetInterruptHandler callback is run on the JS thread.
+        // We need to set a flag that the callback reads.
+        // Thread safety: This method MUST be thread-safe as it's intended to stop
+        // a runaway script on the JS thread.
+        setInterruptInternal(ptr);
+    }
+
+    public void clearInterrupt() {
+        // To allow resuming usage of the runtime after an interrupt.
+        // Not strictly standard but often needed.
+        clearInterruptInternal(ptr);
+    }
+
+    // Internal config
+    private boolean withStdLib = true;
+
+    void setWithStdLib(boolean withStdLib) {
+        this.withStdLib = withStdLib;
+    }
+
+    private native void setMemoryLimitInternal(long runtimePtr, long limit);
+
+    private native void setMaxStackSizeInternal(long runtimePtr, long size);
+
+    private native void setInterruptInternal(long runtimePtr);
+
+    private native void clearInterruptInternal(long runtimePtr);
+
     private native void setModuleLoaderInternal(long runtimePtr, JSModuleLoader loader);
 
     private static native long createRuntimeInternal();
 
     private static native void freeRuntimeInternal(long ptr);
 
-    private native long createNativeContext(long runtimePtr);
+    private native long createNativeContext(long runtimePtr, boolean withStdLib);
 
     private static native boolean executePendingJobInternal(long ptr);
 }

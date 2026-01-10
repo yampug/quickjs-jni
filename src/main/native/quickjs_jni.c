@@ -103,19 +103,86 @@ static void throwJSException(JNIEnv *env, JSContext *ctx, JSValue ex) {
     free(full_msg);
 }
 
+typedef struct {
+  JSRuntime *rt;
+  // Use a simple int flag. 0 = no interrupt, 1 = interrupt.
+  volatile int interrupted;
+  jobject moduleLoader;
+} NativeRuntimeData;
+
+static int js_interrupt_handler(JSRuntime *rt, void *opaque) {
+  NativeRuntimeData *data = (NativeRuntimeData *)opaque;
+  return data->interrupted;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_quickjs_QuickJS_createNativeRuntime(JNIEnv *env, jclass clazz) {
   JSRuntime *rt = JS_NewRuntime();
+  if (!rt)
+    return 0;
+
+  NativeRuntimeData *data = malloc(sizeof(NativeRuntimeData));
+  memset(data, 0, sizeof(NativeRuntimeData));
+  data->rt = rt;
+  data->interrupted = 0;
+  data->moduleLoader = NULL;
+
+  JS_SetRuntimeOpaque(rt, data);
+  JS_SetInterruptHandler(rt, js_interrupt_handler, data);
+
   if (js_java_proxy_class_id == 0) {
     JS_NewClassID(rt, &js_java_proxy_class_id);
   }
   JS_NewClass(rt, js_java_proxy_class_id, &js_java_proxy_class);
+
   return (jlong)rt;
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setMemoryLimitInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr, jlong limit) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (rt) {
+    JS_SetMemoryLimit(rt, (size_t)limit);
+  }
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setMaxStackSizeInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr, jlong size) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (rt) {
+    JS_SetMaxStackSize(rt, (size_t)size);
+  }
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setInterruptInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (rt) {
+    NativeRuntimeData *data = (NativeRuntimeData *)JS_GetRuntimeOpaque(rt);
+    if (data) {
+      data->interrupted = 1;
+    }
+  }
+}
+
+JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_clearInterruptInternal(
+    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+  JSRuntime *rt = (JSRuntime *)runtimePtr;
+  if (rt) {
+    NativeRuntimeData *data = (NativeRuntimeData *)JS_GetRuntimeOpaque(rt);
+    if (data) {
+      data->interrupted = 0;
+    }
+  }
 }
 
 JSModuleDef *js_java_module_loader(JSContext *ctx, const char *module_name,
                                    void *opaque) {
-  jobject loader = (jobject)opaque;
+  NativeRuntimeData *data = (NativeRuntimeData *)opaque;
+  if (!data || !data->moduleLoader)
+    return NULL;
+
+  jobject loader = data->moduleLoader;
   if (!loader)
     return NULL;
 
@@ -174,19 +241,22 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setModuleLoaderInternal(
   if (!rt)
     return;
 
+  NativeRuntimeData *data = (NativeRuntimeData *)JS_GetRuntimeOpaque(rt);
+  if (!data)
+    return;
+
   // Manage previous loader
-  jobject oldLoader = (jobject)JS_GetRuntimeOpaque(rt);
-  if (oldLoader) {
-    (*env)->DeleteGlobalRef(env, oldLoader);
+  if (data->moduleLoader) {
+    (*env)->DeleteGlobalRef(env, data->moduleLoader);
+    data->moduleLoader = NULL;
   }
 
-  jobject newLoader = NULL;
   if (loader) {
-    newLoader = (*env)->NewGlobalRef(env, loader);
+    data->moduleLoader = (*env)->NewGlobalRef(env, loader);
   }
-  JS_SetRuntimeOpaque(rt, newLoader);
 
-  JS_SetModuleLoaderFunc(rt, NULL, js_java_module_loader, newLoader);
+  // We pass 'data' as opaque to the loader func, which extracts moduleLoader
+  JS_SetModuleLoaderFunc(rt, NULL, js_java_module_loader, data);
 }
 
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
@@ -223,9 +293,12 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_freeNativeRuntime(
     JNIEnv *env, jobject thiz, jlong runtimePtr) {
   JSRuntime *rt = (JSRuntime *)runtimePtr;
   if (rt) {
-    jobject oldLoader = (jobject)JS_GetRuntimeOpaque(rt);
-    if (oldLoader) {
-      (*env)->DeleteGlobalRef(env, oldLoader);
+    NativeRuntimeData *data = (NativeRuntimeData *)JS_GetRuntimeOpaque(rt);
+    if (data) {
+      if (data->moduleLoader) {
+        (*env)->DeleteGlobalRef(env, data->moduleLoader);
+      }
+      free(data);
     }
     JS_FreeRuntime(rt);
   }
@@ -234,11 +307,21 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_freeNativeRuntime(
 // ... Rest of file methods needing restoration ...
 
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSRuntime_createNativeContext(
-    JNIEnv *env, jobject thiz, jlong runtimePtr) {
+    JNIEnv *env, jobject thiz, jlong runtimePtr, jboolean withStdLib) {
   JSRuntime *rt = (JSRuntime *)runtimePtr;
   if (!rt)
     return 0;
-  JSContext *ctx = JS_NewContext(rt);
+
+  JSContext *ctx;
+  if (withStdLib) {
+    ctx = JS_NewContext(rt);
+  } else {
+    ctx = JS_NewContextRaw(rt);
+    if (ctx) {
+      JS_AddIntrinsicBaseObjects(ctx);
+      JS_AddIntrinsicEval(ctx);
+    }
+  }
   return (jlong)ctx;
 }
 
