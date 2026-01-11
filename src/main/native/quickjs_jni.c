@@ -40,6 +40,8 @@ static void ReleaseStringUTFChars(JNIEnv *env, jstring str, const char *chars) {
 
 static jlong boxJSValue(JSValue v) {
   JSValue *p = malloc(sizeof(JSValue));
+  if (!p)
+    return 0;
   *p = v;
   return (jlong)p;
 }
@@ -98,9 +100,20 @@ static void throw_java_exception(JNIEnv *env, JSContext *ctx,
 
   // 5. Throw Java Exception
   jclass excCls = (*env)->FindClass(env, className);
-  if (!excCls)
+  if (!excCls) {
+    (*env)->ExceptionClear(env);
     excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
-  (*env)->ThrowNew(env, excCls, final_msg);
+  }
+
+  if (excCls) {
+    (*env)->ThrowNew(env, excCls, final_msg);
+  } else {
+    // Last resort: if we can't find even QuickJSException, we are in trouble.
+    // JVM might be in bad state or classpath broken.
+    // Try throwing a basic RuntimeException or just fatal error.
+    (*env)->FatalError(
+        env, "QuickJS JNI: Could not find com/quickjs/QuickJSException");
+  }
 
   // Clean up
   if (msg)
@@ -138,6 +151,10 @@ Java_com_quickjs_QuickJS_createNativeRuntime(JNIEnv *env, jclass clazz) {
     return 0;
 
   NativeRuntimeData *data = malloc(sizeof(NativeRuntimeData));
+  if (!data) {
+    JS_FreeRuntime(rt);
+    return 0;
+  }
   memset(data, 0, sizeof(NativeRuntimeData));
   data->rt = rt;
   data->interrupted = 0;
@@ -597,24 +614,69 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
   }
 
   jclass jsFunctionCls = (*env)->FindClass(env, "com/quickjs/JSFunction");
+  if (!jsFunctionCls)
+    return JS_ThrowInternalError(ctx,
+                                 "JNI Error: com/quickjs/JSFunction not found");
+
   jmethodID applyMethod =
       (*env)->GetMethodID(env, jsFunctionCls, "apply",
                           "(Lcom/quickjs/JSContext;Lcom/quickjs/JSValue;[Lcom/"
                           "quickjs/JSValue;)Lcom/quickjs/JSValue;");
+  if (!applyMethod)
+    return JS_ThrowInternalError(ctx, "JNI Error: JSFunction.apply not found");
 
   jclass jsValueCls = (*env)->FindClass(env, "com/quickjs/JSValue");
+  if (!jsValueCls)
+    return JS_ThrowInternalError(ctx,
+                                 "JNI Error: com/quickjs/JSValue not found");
+
   jmethodID jsValueCtor = (*env)->GetMethodID(env, jsValueCls, "<init>",
                                               "(JLcom/quickjs/JSContext;)V");
+  if (!jsValueCtor)
+    return JS_ThrowInternalError(ctx,
+                                 "JNI Error: JSValue constructor not found");
 
   jlong thisPtr = boxJSValue(JS_DupValue(ctx, this_val));
+  if (thisPtr == 0)
+    return JS_ThrowInternalError(ctx, "Native Error: OOM in boxJSValue");
+
   jobject jThis =
       (*env)->NewObject(env, jsValueCls, jsValueCtor, thisPtr, javaContext);
+  if (!jThis) {
+    free((void *)thisPtr); // Helper doesn't expose free, but we know it's
+                           // malloc'd. Or just leak for now to avoid crash? No,
+                           // strict cleanup.
+    // Actually boxJSValue return malloced pointer. casting jlong back to ptr.
+    return JS_ThrowInternalError(ctx,
+                                 "JNI Error: Failed to create 'this' JSValue");
+  }
 
   jobjectArray jArgs = (*env)->NewObjectArray(env, argc, jsValueCls, NULL);
+  if (!jArgs) {
+    (*env)->DeleteLocalRef(env, jThis);
+    return JS_ThrowInternalError(ctx,
+                                 "JNI Error: Failed to create argument array");
+  }
+
   for (int i = 0; i < argc; i++) {
     jlong argPtr = boxJSValue(JS_DupValue(ctx, argv[i]));
+    if (argPtr == 0) {
+      // Cleanup required! Simple approach: just fail hard, cleaner/GC will
+      // eventually reap others? No, local refs leak.
+      (*env)->DeleteLocalRef(env, jThis);
+      (*env)->DeleteLocalRef(env, jArgs);
+      return JS_ThrowInternalError(ctx, "Native Error: OOM in argument boxing");
+    }
     jobject jArg =
         (*env)->NewObject(env, jsValueCls, jsValueCtor, argPtr, javaContext);
+    if (!jArg) {
+      // argPtr leaked if we don't free it.
+      free((void *)argPtr);
+      (*env)->DeleteLocalRef(env, jThis);
+      (*env)->DeleteLocalRef(env, jArgs);
+      return JS_ThrowInternalError(
+          ctx, "JNI Error: Failed to create argument JSValue");
+    }
     (*env)->SetObjectArrayElement(env, jArgs, i, jArg);
     (*env)->DeleteLocalRef(env, jArg);
   }
@@ -631,18 +693,34 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
     (*env)->ExceptionClear(env);
 
     jclass exCls = (*env)->GetObjectClass(env, ex);
+    jstring msg = NULL;
+
     jmethodID toString =
         (*env)->GetMethodID(env, exCls, "toString", "()Ljava/lang/String;");
-    jstring msg = (jstring)(*env)->CallObjectMethod(env, ex, toString);
-    const char *c_msg = GetStringUTFChars(env, msg);
+    if (toString) {
+      msg = (jstring)(*env)->CallObjectMethod(env, ex, toString);
+    }
+
+    // Fallback if toString fails
+    const char *c_msg = "Unknown Java Exception";
+    if (msg) {
+      const char *temp_msg = GetStringUTFChars(env, msg);
+      if (temp_msg)
+        c_msg = temp_msg;
+    }
 
     JSValue err = JS_NewError(ctx);
     JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, c_msg),
                               JS_PROP_C_W_E);
 
-    ReleaseStringUTFChars(env, msg, c_msg);
+    if (msg) {
+      const char *temp_msg =
+          GetStringUTFChars(env, msg); // Re-get to release properly
+      if (temp_msg)
+        ReleaseStringUTFChars(env, msg, temp_msg);
+      (*env)->DeleteLocalRef(env, msg);
+    }
     (*env)->DeleteLocalRef(env, ex);
-    (*env)->DeleteLocalRef(env, msg);
     (*env)->DeleteLocalRef(env, exCls);
 
     return JS_Throw(ctx, err);
