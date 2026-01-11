@@ -220,11 +220,21 @@ JSModuleDef *js_java_module_loader(JSContext *ctx, const char *module_name,
   (*env)->DeleteLocalRef(env, loaderCls);
 
   if ((*env)->ExceptionCheck(env)) {
-    // Exception in loader -> throw in JS
-    // We can't easily propagate the Java exception to the module loader failure
-    // failure directly as proper JS error, but returning NULL causes a generic
-    // generic load error.
-    (*env)->ExceptionClear(env); // Clear it so we don't crash JNI
+    jthrowable ex = (*env)->ExceptionOccurred(env);
+    (*env)->ExceptionClear(env);
+
+    jclass exCls = (*env)->GetObjectClass(env, ex);
+    jmethodID toString =
+        (*env)->GetMethodID(env, exCls, "toString", "()Ljava/lang/String;");
+    jstring jMsg = (jstring)(*env)->CallObjectMethod(env, ex, toString);
+    const char *cMsg = GetStringUTFChars(env, jMsg);
+
+    JS_ThrowTypeError(ctx, "Java Module Loader failed: %s", cMsg);
+
+    ReleaseStringUTFChars(env, jMsg, cMsg);
+    (*env)->DeleteLocalRef(env, jMsg);
+    (*env)->DeleteLocalRef(env, exCls);
+    (*env)->DeleteLocalRef(env, ex);
     return NULL;
   }
 
@@ -233,10 +243,7 @@ JSModuleDef *js_java_module_loader(JSContext *ctx, const char *module_name,
   }
 
   const char *content = GetStringUTFChars(env, jContent);
-  // Takes ownership of buffer? No, JS_Eval creates copy?
-  // JS_Eval(ctx, input, input_len, filename, flags)
-  // For module loading, we usually return JS_Eval result which is a Module
-  // object.
+  /* JS_Eval copies the input so we can release the string immediately after. */
 
   JSValue val = JS_Eval(ctx, content, strlen(content), module_name,
                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -278,10 +285,6 @@ JNIEXPORT void JNICALL Java_com_quickjs_JSRuntime_setModuleLoaderInternal(
 JNIEXPORT jlong JNICALL Java_com_quickjs_JSContext_evalInternal(
     JNIEnv *env, jobject thiz, jlong contextPtr, jstring script,
     jstring fileName, jint type) {
-  JSRuntime *rt = (JSRuntime *)contextPtr; // Wait, contextPtr is JSContext*?
-  // Previous code cast JSRuntime... wait.
-  // Line 265: JSContext *ctx = (JSContext *)contextPtr;
-  // OK.
 
   JSContext *ctx = (JSContext *)contextPtr;
   CHECK_CONTEXT(ctx);
@@ -884,16 +887,7 @@ JNIEXPORT jboolean JNICALL Java_com_quickjs_JSRuntime_executePendingJobInternal(
   if (err < 0) {
     // Exception thrown during job execution
     JSValue ex = JS_GetException(ctx);
-    // For now, we print it, or we could bubble it up if we had a way.
-    // JS_ExecutePendingJob swallows the exception context usually.
-    // But we can check it.
-    // Ideally we should report this to a "UncaughtException" handler in Java.
-    // Printing for now.
-    const char *str = JS_ToCString(ctx, ex);
-    if (str) {
-      fprintf(stderr, "Uncaught exception in Promise: %s\n", str);
-      JS_FreeCString(ctx, str);
-    }
+    throw_java_exception(env, ctx, ex);
     JS_FreeValue(ctx, ex);
   }
 
