@@ -63,9 +63,7 @@ public class QuickJS {
             if (maxStackSize > 0) {
                 runtime.setMaxStackSize(maxStackSize);
             }
-            // StdLib is per-context, so we need to store this pref in JSRuntime?
-            // Actually, JSRuntime creates the context.
-            // So we should pass this config to JSRuntime.
+
             runtime.setWithStdLib(withStdLib);
             return runtime;
         }
