@@ -46,73 +46,105 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   // Cache JSFunction
   jclass localJSFn = (*env)->FindClass(env, "com/quickjs/JSFunction");
   if (!localJSFn)
-    return JNI_ERR;
+    goto error;
   g_JSFunctionClass = (*env)->NewGlobalRef(env, localJSFn);
   (*env)->DeleteLocalRef(env, localJSFn);
+  if (!g_JSFunctionClass)
+    goto error;
 
   g_JSFunction_apply =
       (*env)->GetMethodID(env, g_JSFunctionClass, "apply",
                           "(Lcom/quickjs/JSContext;Lcom/quickjs/JSValue;[Lcom/"
                           "quickjs/JSValue;)Lcom/quickjs/JSValue;");
   if (!g_JSFunction_apply)
-    return JNI_ERR;
+    goto error;
 
   // Cache JSValue
   jclass localJSVal = (*env)->FindClass(env, "com/quickjs/JSValue");
   if (!localJSVal)
-    return JNI_ERR;
+    goto error;
   g_JSValueClass = (*env)->NewGlobalRef(env, localJSVal);
   (*env)->DeleteLocalRef(env, localJSVal);
+  if (!g_JSValueClass)
+    goto error;
 
   g_JSValue_ctor = (*env)->GetMethodID(env, g_JSValueClass, "<init>",
                                        "(JLcom/quickjs/JSContext;)V");
   if (!g_JSValue_ctor)
-    return JNI_ERR;
+    goto error;
 
   g_JSValue_ptr = (*env)->GetFieldID(env, g_JSValueClass, "ptr", "J");
   if (!g_JSValue_ptr)
-    return JNI_ERR;
+    goto error;
 
   // Cache Exception Classes
   jclass localEx;
 
-  localEx = (*env)->FindClass(env, "com/quickjs/QuickJSException");
-  if (!localEx)
-    return JNI_ERR;
-  g_QuickJSExceptionClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
+// Helper macro for caching exceptions
+#define CACHE_EX(clsName, globalVar)                                           \
+  localEx = (*env)->FindClass(env, clsName);                                   \
+  if (!localEx)                                                                \
+    goto error;                                                                \
+  globalVar = (*env)->NewGlobalRef(env, localEx);                              \
+  (*env)->DeleteLocalRef(env, localEx);                                        \
+  if (!globalVar)                                                              \
+    goto error;
 
-  localEx = (*env)->FindClass(env, "com/quickjs/JSSyntaxError");
-  if (!localEx)
-    return JNI_ERR;
-  g_JSSyntaxErrorClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
+  CACHE_EX("com/quickjs/QuickJSException", g_QuickJSExceptionClass);
+  CACHE_EX("com/quickjs/JSSyntaxError", g_JSSyntaxErrorClass);
+  CACHE_EX("com/quickjs/JSReferenceError", g_JSReferenceErrorClass);
+  CACHE_EX("com/quickjs/JSTypeError", g_JSTypeErrorClass);
+  CACHE_EX("com/quickjs/JSRangeError", g_JSRangeErrorClass);
+  CACHE_EX("com/quickjs/JSInternalError", g_JSInternalErrorClass);
 
-  localEx = (*env)->FindClass(env, "com/quickjs/JSReferenceError");
-  if (!localEx)
-    return JNI_ERR;
-  g_JSReferenceErrorClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
-
-  localEx = (*env)->FindClass(env, "com/quickjs/JSTypeError");
-  if (!localEx)
-    return JNI_ERR;
-  g_JSTypeErrorClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
-
-  localEx = (*env)->FindClass(env, "com/quickjs/JSRangeError");
-  if (!localEx)
-    return JNI_ERR;
-  g_JSRangeErrorClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
-
-  localEx = (*env)->FindClass(env, "com/quickjs/JSInternalError");
-  if (!localEx)
-    return JNI_ERR;
-  g_JSInternalErrorClass = (*env)->NewGlobalRef(env, localEx);
-  (*env)->DeleteLocalRef(env, localEx);
+#undef CACHE_EX
 
   return JNI_VERSION_1_6;
+
+error:
+  // Cleanup whatever was allocated
+  if (g_JSFunctionClass)
+    (*env)->DeleteGlobalRef(env, g_JSFunctionClass);
+  if (g_JSValueClass)
+    (*env)->DeleteGlobalRef(env, g_JSValueClass);
+  if (g_QuickJSExceptionClass)
+    (*env)->DeleteGlobalRef(env, g_QuickJSExceptionClass);
+  if (g_JSSyntaxErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSSyntaxErrorClass);
+  if (g_JSReferenceErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSReferenceErrorClass);
+  if (g_JSTypeErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSTypeErrorClass);
+  if (g_JSRangeErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSRangeErrorClass);
+  if (g_JSInternalErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSInternalErrorClass);
+
+  return JNI_ERR;
+}
+
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
+  JNIEnv *env;
+  if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+    return;
+  }
+
+  if (g_JSFunctionClass)
+    (*env)->DeleteGlobalRef(env, g_JSFunctionClass);
+  if (g_JSValueClass)
+    (*env)->DeleteGlobalRef(env, g_JSValueClass);
+  if (g_QuickJSExceptionClass)
+    (*env)->DeleteGlobalRef(env, g_QuickJSExceptionClass);
+  if (g_JSSyntaxErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSSyntaxErrorClass);
+  if (g_JSReferenceErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSReferenceErrorClass);
+  if (g_JSTypeErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSTypeErrorClass);
+  if (g_JSRangeErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSRangeErrorClass);
+  if (g_JSInternalErrorClass)
+    (*env)->DeleteGlobalRef(env, g_JSInternalErrorClass);
 }
 
 static const char *GetStringUTFChars(JNIEnv *env, jstring str) {
