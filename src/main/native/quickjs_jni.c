@@ -28,6 +28,14 @@ static jclass g_JSValueClass;
 static jmethodID g_JSValue_ctor;
 static jfieldID g_JSValue_ptr;
 
+// Cached Exception Classes
+static jclass g_QuickJSExceptionClass;
+static jclass g_JSSyntaxErrorClass;
+static jclass g_JSReferenceErrorClass;
+static jclass g_JSTypeErrorClass;
+static jclass g_JSRangeErrorClass;
+static jclass g_JSInternalErrorClass;
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   g_vm = vm;
   JNIEnv *env;
@@ -64,6 +72,45 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   g_JSValue_ptr = (*env)->GetFieldID(env, g_JSValueClass, "ptr", "J");
   if (!g_JSValue_ptr)
     return JNI_ERR;
+
+  // Cache Exception Classes
+  jclass localEx;
+
+  localEx = (*env)->FindClass(env, "com/quickjs/QuickJSException");
+  if (!localEx)
+    return JNI_ERR;
+  g_QuickJSExceptionClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
+
+  localEx = (*env)->FindClass(env, "com/quickjs/JSSyntaxError");
+  if (!localEx)
+    return JNI_ERR;
+  g_JSSyntaxErrorClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
+
+  localEx = (*env)->FindClass(env, "com/quickjs/JSReferenceError");
+  if (!localEx)
+    return JNI_ERR;
+  g_JSReferenceErrorClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
+
+  localEx = (*env)->FindClass(env, "com/quickjs/JSTypeError");
+  if (!localEx)
+    return JNI_ERR;
+  g_JSTypeErrorClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
+
+  localEx = (*env)->FindClass(env, "com/quickjs/JSRangeError");
+  if (!localEx)
+    return JNI_ERR;
+  g_JSRangeErrorClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
+
+  localEx = (*env)->FindClass(env, "com/quickjs/JSInternalError");
+  if (!localEx)
+    return JNI_ERR;
+  g_JSInternalErrorClass = (*env)->NewGlobalRef(env, localEx);
+  (*env)->DeleteLocalRef(env, localEx);
 
   return JNI_VERSION_1_6;
 }
@@ -102,21 +149,21 @@ static void throw_java_exception(JNIEnv *env, JSContext *ctx,
   const char *msg = JS_ToCString(ctx, exception_val);
 
   // 2. Detect Exception Class
-  const char *className = "com/quickjs/QuickJSException";
+  jclass excCls = g_QuickJSExceptionClass;
   JSValue nameVal = JS_GetPropertyStr(ctx, exception_val, "name");
   if (!JS_IsUndefined(nameVal) && !JS_IsNull(nameVal)) {
     const char *name = JS_ToCString(ctx, nameVal);
     if (name) {
       if (strcmp(name, "SyntaxError") == 0)
-        className = "com/quickjs/JSSyntaxError";
+        excCls = g_JSSyntaxErrorClass;
       else if (strcmp(name, "ReferenceError") == 0)
-        className = "com/quickjs/JSReferenceError";
+        excCls = g_JSReferenceErrorClass;
       else if (strcmp(name, "TypeError") == 0)
-        className = "com/quickjs/JSTypeError";
+        excCls = g_JSTypeErrorClass;
       else if (strcmp(name, "RangeError") == 0)
-        className = "com/quickjs/JSRangeError";
+        excCls = g_JSRangeErrorClass;
       else if (strcmp(name, "InternalError") == 0)
-        className = "com/quickjs/JSInternalError";
+        excCls = g_JSInternalErrorClass;
       JS_FreeCString(ctx, name);
     }
   }
@@ -141,20 +188,10 @@ static void throw_java_exception(JNIEnv *env, JSContext *ctx,
   const char *final_msg = full_msg ? full_msg : (msg ? msg : "Unknown Error");
 
   // 5. Throw Java Exception
-  jclass excCls = (*env)->FindClass(env, className);
-  if (!excCls) {
-    (*env)->ExceptionClear(env);
-    excCls = (*env)->FindClass(env, "com/quickjs/QuickJSException");
-  }
-
   if (excCls) {
     (*env)->ThrowNew(env, excCls, final_msg);
   } else {
-    // Last resort: if we can't find even QuickJSException, we are in trouble.
-    // JVM might be in bad state or classpath broken.
-    // Try throwing a basic RuntimeException or just fatal error.
-    (*env)->FatalError(
-        env, "QuickJS JNI: Could not find com/quickjs/QuickJSException");
+    (*env)->FatalError(env, "QuickJS JNI: Exception class corrupted");
   }
 
   // Clean up
