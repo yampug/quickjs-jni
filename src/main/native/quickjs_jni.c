@@ -21,8 +21,50 @@ static JSClassDef js_java_proxy_class = {
     .finalizer = js_java_proxy_finalizer,
 };
 
+// Cached JNI entries
+static jclass g_JSFunctionClass;
+static jmethodID g_JSFunction_apply;
+static jclass g_JSValueClass;
+static jmethodID g_JSValue_ctor;
+static jfieldID g_JSValue_ptr;
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   g_vm = vm;
+  JNIEnv *env;
+  if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+    return JNI_ERR;
+  }
+
+  // Cache JSFunction
+  jclass localJSFn = (*env)->FindClass(env, "com/quickjs/JSFunction");
+  if (!localJSFn)
+    return JNI_ERR;
+  g_JSFunctionClass = (*env)->NewGlobalRef(env, localJSFn);
+  (*env)->DeleteLocalRef(env, localJSFn);
+
+  g_JSFunction_apply =
+      (*env)->GetMethodID(env, g_JSFunctionClass, "apply",
+                          "(Lcom/quickjs/JSContext;Lcom/quickjs/JSValue;[Lcom/"
+                          "quickjs/JSValue;)Lcom/quickjs/JSValue;");
+  if (!g_JSFunction_apply)
+    return JNI_ERR;
+
+  // Cache JSValue
+  jclass localJSVal = (*env)->FindClass(env, "com/quickjs/JSValue");
+  if (!localJSVal)
+    return JNI_ERR;
+  g_JSValueClass = (*env)->NewGlobalRef(env, localJSVal);
+  (*env)->DeleteLocalRef(env, localJSVal);
+
+  g_JSValue_ctor = (*env)->GetMethodID(env, g_JSValueClass, "<init>",
+                                       "(JLcom/quickjs/JSContext;)V");
+  if (!g_JSValue_ctor)
+    return JNI_ERR;
+
+  g_JSValue_ptr = (*env)->GetFieldID(env, g_JSValueClass, "ptr", "J");
+  if (!g_JSValue_ptr)
+    return JNI_ERR;
+
   return JNI_VERSION_1_6;
 }
 
@@ -613,45 +655,20 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
     return JS_ThrowInternalError(ctx, "Java JSContext is dead");
   }
 
-  jclass jsFunctionCls = (*env)->FindClass(env, "com/quickjs/JSFunction");
-  if (!jsFunctionCls)
-    return JS_ThrowInternalError(ctx,
-                                 "JNI Error: com/quickjs/JSFunction not found");
-
-  jmethodID applyMethod =
-      (*env)->GetMethodID(env, jsFunctionCls, "apply",
-                          "(Lcom/quickjs/JSContext;Lcom/quickjs/JSValue;[Lcom/"
-                          "quickjs/JSValue;)Lcom/quickjs/JSValue;");
-  if (!applyMethod)
-    return JS_ThrowInternalError(ctx, "JNI Error: JSFunction.apply not found");
-
-  jclass jsValueCls = (*env)->FindClass(env, "com/quickjs/JSValue");
-  if (!jsValueCls)
-    return JS_ThrowInternalError(ctx,
-                                 "JNI Error: com/quickjs/JSValue not found");
-
-  jmethodID jsValueCtor = (*env)->GetMethodID(env, jsValueCls, "<init>",
-                                              "(JLcom/quickjs/JSContext;)V");
-  if (!jsValueCtor)
-    return JS_ThrowInternalError(ctx,
-                                 "JNI Error: JSValue constructor not found");
-
+  // Use cached classes and methods
   jlong thisPtr = boxJSValue(JS_DupValue(ctx, this_val));
   if (thisPtr == 0)
     return JS_ThrowInternalError(ctx, "Native Error: OOM in boxJSValue");
 
-  jobject jThis =
-      (*env)->NewObject(env, jsValueCls, jsValueCtor, thisPtr, javaContext);
+  jobject jThis = (*env)->NewObject(env, g_JSValueClass, g_JSValue_ctor,
+                                    thisPtr, javaContext);
   if (!jThis) {
-    free((void *)thisPtr); // Helper doesn't expose free, but we know it's
-                           // malloc'd. Or just leak for now to avoid crash? No,
-                           // strict cleanup.
-    // Actually boxJSValue return malloced pointer. casting jlong back to ptr.
+    free((void *)thisPtr);
     return JS_ThrowInternalError(ctx,
                                  "JNI Error: Failed to create 'this' JSValue");
   }
 
-  jobjectArray jArgs = (*env)->NewObjectArray(env, argc, jsValueCls, NULL);
+  jobjectArray jArgs = (*env)->NewObjectArray(env, argc, g_JSValueClass, NULL);
   if (!jArgs) {
     (*env)->DeleteLocalRef(env, jThis);
     return JS_ThrowInternalError(ctx,
@@ -661,16 +678,13 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
   for (int i = 0; i < argc; i++) {
     jlong argPtr = boxJSValue(JS_DupValue(ctx, argv[i]));
     if (argPtr == 0) {
-      // Cleanup required! Simple approach: just fail hard, cleaner/GC will
-      // eventually reap others? No, local refs leak.
       (*env)->DeleteLocalRef(env, jThis);
       (*env)->DeleteLocalRef(env, jArgs);
       return JS_ThrowInternalError(ctx, "Native Error: OOM in argument boxing");
     }
-    jobject jArg =
-        (*env)->NewObject(env, jsValueCls, jsValueCtor, argPtr, javaContext);
+    jobject jArg = (*env)->NewObject(env, g_JSValueClass, g_JSValue_ctor,
+                                     argPtr, javaContext);
     if (!jArg) {
-      // argPtr leaked if we don't free it.
       free((void *)argPtr);
       (*env)->DeleteLocalRef(env, jThis);
       (*env)->DeleteLocalRef(env, jArgs);
@@ -681,8 +695,8 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
     (*env)->DeleteLocalRef(env, jArg);
   }
 
-  jobject jResult = (*env)->CallObjectMethod(env, javaCallback, applyMethod,
-                                             javaContext, jThis, jArgs);
+  jobject jResult = (*env)->CallObjectMethod(
+      env, javaCallback, g_JSFunction_apply, javaContext, jThis, jArgs);
 
   (*env)->DeleteLocalRef(env, javaContext);
   (*env)->DeleteLocalRef(env, jThis);
@@ -730,8 +744,7 @@ static JSValue callback_trampoline(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
   }
 
-  jfieldID ptrField = (*env)->GetFieldID(env, jsValueCls, "ptr", "J");
-  jlong resPtr = (*env)->GetLongField(env, jResult, ptrField);
+  jlong resPtr = (*env)->GetLongField(env, jResult, g_JSValue_ptr);
 
   JSValue *resValPtr = (JSValue *)resPtr;
   JSValue resVal = JS_DupValue(ctx, *resValPtr);
